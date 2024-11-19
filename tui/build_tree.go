@@ -18,12 +18,18 @@ import (
 
 func BuildTreeView(commit *model.Commit) *tview.TreeView {
 	root := BuildTreeModel(commit.Document, commit.Changes)
+	if root == nil {
+		return nil
+	}
 	tree := tview.NewTreeView()
 	tree.SetRoot(root).SetCurrentNode(root)
 	return tree
 }
 
 func BuildTreeModel(doc libopenapi.Document, changes *whatChangedModel.DocumentChanges) *tview.TreeNode {
+	if doc == nil {
+		return nil
+	}
 	root := tview.NewTreeNode(doc.GetSpecInfo().SpecType).SetColor(CYAN_CELL_COLOR)
 	if changes != nil {
 		buildTreeNode(root, changes)
@@ -50,7 +56,11 @@ func buildTreeNode(root *tview.TreeNode, object any) *tview.TreeNode {
 			continue
 
 		case reflect.TypeOf([]*whatChangedModel.Change{}):
-			topChanges = append(topChanges, field.Elem().Interface().([]*whatChangedModel.Change)...)
+			slice, ok := field.Interface().([]*whatChangedModel.Change)
+			if !ok {
+				continue
+			}
+			topChanges = append(topChanges, slice...)
 			continue
 
 		case reflect.TypeOf(&whatChangedModel.InfoChanges{}):

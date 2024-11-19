@@ -8,18 +8,19 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
 	"github.com/pb33f/libopenapi/index"
 	"github.com/pb33f/openapi-changes/git"
 	htmlReport "github.com/pb33f/openapi-changes/html-report"
 	"github.com/pb33f/openapi-changes/model"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
-	"github.com/twinj/uuid"
-	"net/url"
-	"os"
-	"path/filepath"
-	"strings"
-	"time"
 )
 
 func GetHTMLReportCommand() *cobra.Command {
@@ -41,7 +42,9 @@ func GetHTMLReportCommand() *cobra.Command {
 			noColorFlag, _ := cmd.Flags().GetBool("no-color")
 			cdnFlag, _ := cmd.Flags().GetBool("use-cdn")
 			latestFlag, _ := cmd.Flags().GetBool("top")
+			globalRevisionsFlag, _ := cmd.Flags().GetBool("global-revisions")
 			limitFlag, _ := cmd.Flags().GetInt("limit")
+			limitTimeFlag, _ := cmd.Flags().GetInt("limit-time")
 			remoteFlag, _ := cmd.Flags().GetBool("remote")
 
 			if noColorFlag {
@@ -167,7 +170,7 @@ func GetHTMLReportCommand() *cobra.Command {
 							return err
 						}
 						report, _, er := RunGithubHistoryHTMLReport(user, repo, filePath, latestFlag, cdnFlag,
-							false, updateChan, errorChan, limitFlag, baseFlag, remoteFlag)
+							false, updateChan, errorChan, limitFlag, limitTimeFlag, baseFlag, remoteFlag)
 
 						// wait for things to be completed.
 						<-doneChan
@@ -225,7 +228,7 @@ func GetHTMLReportCommand() *cobra.Command {
 					go listenForUpdates(updateChan, errorChan)
 
 					report, _, er := RunGitHistoryHTMLReport(args[0], args[1], latestFlag, cdnFlag,
-						updateChan, errorChan, baseFlag, remoteFlag)
+						updateChan, errorChan, baseFlag, remoteFlag, globalRevisionsFlag, limitFlag, limitTimeFlag)
 					<-doneChan
 					if er != nil {
 						for x := range er {
@@ -302,7 +305,7 @@ func ExtractGithubDetailsFromURL(url *url.URL) (string, string, string, error) {
 }
 
 func RunGitHistoryHTMLReport(gitPath, filePath string, latest, useCDN bool,
-	progressChan chan *model.ProgressUpdate, errorChan chan model.ProgressError, base string, remote bool) ([]byte, []*model.Report, []error) {
+	progressChan chan *model.ProgressUpdate, errorChan chan model.ProgressError, base string, remote bool, globalRevisions bool, limit int, limitTime int) ([]byte, []*model.Report, []error) {
 	if gitPath == "" || filePath == "" {
 		err := errors.New("please supply a path to a git repo via -r, and a path to a file via -f")
 		model.SendProgressError("reading paths",
@@ -312,7 +315,7 @@ func RunGitHistoryHTMLReport(gitPath, filePath string, latest, useCDN bool,
 	}
 
 	// build commit history.
-	commitHistory, err := git.ExtractHistoryFromFile(gitPath, filePath, progressChan, errorChan)
+	commitHistory, err := git.ExtractHistoryFromFile(gitPath, filePath, progressChan, errorChan, globalRevisions, limit, limitTime)
 	if err != nil {
 		model.SendFatalError("extraction",
 			fmt.Sprintf("cannot extract history %s", errors.Join(err...)), errorChan)
@@ -321,7 +324,7 @@ func RunGitHistoryHTMLReport(gitPath, filePath string, latest, useCDN bool,
 	}
 
 	// populate history with changes and data
-	commitHistory, err = git.PopulateHistoryWithChanges(commitHistory, 0, progressChan, errorChan, base, remote)
+	commitHistory, err = git.PopulateHistoryWithChanges(commitHistory, 0, limitTime, progressChan, errorChan, base, remote)
 	if err != nil {
 		model.SendFatalError("extraction",
 			fmt.Sprintf("cannot extract history %s", errors.Join(err...)), errorChan)
@@ -352,9 +355,9 @@ func RunGitHistoryHTMLReport(gitPath, filePath string, latest, useCDN bool,
 }
 
 func RunGithubHistoryHTMLReport(username, repo, filePath string, latest, useCDN, embeddedMode bool,
-	progressChan chan *model.ProgressUpdate, errorChan chan model.ProgressError, limit int, base string, remote bool) ([]byte, []*model.Report, []error) {
+	progressChan chan *model.ProgressUpdate, errorChan chan model.ProgressError, limit int, limitTime int, base string, remote bool) ([]byte, []*model.Report, []error) {
 
-	commitHistory, errs := git.ProcessGithubRepo(username, repo, filePath, progressChan, errorChan, true, limit, base, remote)
+	commitHistory, errs := git.ProcessGithubRepo(username, repo, filePath, progressChan, errorChan, true, limit, limitTime, base, remote)
 	if latest && len(commitHistory) > 1 {
 		commitHistory = commitHistory[:1]
 	}
@@ -410,13 +413,13 @@ func RunLeftRightHTMLReport(left, right string, useCDN bool,
 
 	commits := []*model.Commit{
 		{
-			Hash:       uuid.NewV4().String()[:6],
+			Hash:       uuid.New().String()[:6],
 			Message:    fmt.Sprintf("New: %s, Original: %s", right, left),
 			CommitDate: time.Now(),
 			Data:       rightBytes,
 		},
 		{
-			Hash:       uuid.NewV4().String()[:6],
+			Hash:       uuid.New().String()[:6],
 			Message:    fmt.Sprintf("Original file: %s", left),
 			CommitDate: time.Now(),
 			Data:       leftBytes,
@@ -442,13 +445,13 @@ func RunLeftRightHTMLReportViaString(left, right string, useCDN, embedded bool,
 
 	commits := []*model.Commit{
 		{
-			Hash:       uuid.NewV4().String()[:6],
+			Hash:       uuid.New().String()[:6],
 			Message:    fmt.Sprintf("Uploaded original (%d bytes)", len(left)),
 			CommitDate: time.Now(),
 			Data:       []byte(left),
 		},
 		{
-			Hash:       uuid.NewV4().String()[:6],
+			Hash:       uuid.New().String()[:6],
 			Message:    fmt.Sprintf("Uploaded modification (%d bytes)", len(right)),
 			CommitDate: time.Now(),
 			Data:       []byte(right),

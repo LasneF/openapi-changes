@@ -13,12 +13,12 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pb33f/openapi-changes/git"
 	"github.com/pb33f/openapi-changes/model"
 	"github.com/pb33f/openapi-changes/tui"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
-	"github.com/twinj/uuid"
 )
 
 func GetConsoleCommand() *cobra.Command {
@@ -37,7 +37,9 @@ func GetConsoleCommand() *cobra.Command {
 			doneChan := make(chan bool)
 			failed := false
 			latestFlag, _ := cmd.Flags().GetBool("top")
+			globalRevisionsFlag, _ := cmd.Flags().GetBool("global-revisions")
 			limitFlag, _ := cmd.Flags().GetInt("limit")
+			limitTimeFlag, _ := cmd.Flags().GetInt("limit-time")
 			baseFlag, _ := cmd.Flags().GetString("base")
 			remoteFlag, _ := cmd.Flags().GetBool("remote")
 
@@ -143,7 +145,7 @@ func GetConsoleCommand() *cobra.Command {
 							<-doneChan
 							return err
 						}
-						commits, e := runGithubHistoryConsole(user, repo, filePath, latestFlag, limitFlag, updateChan,
+						commits, e := runGithubHistoryConsole(user, repo, filePath, latestFlag, limitFlag, limitTimeFlag, updateChan,
 							errorChan, baseFlag, remoteFlag)
 
 						// wait for things to be completed.
@@ -204,7 +206,7 @@ func GetConsoleCommand() *cobra.Command {
 
 					go listenForUpdates(updateChan, errorChan)
 
-					commits, errs := runGitHistoryConsole(args[0], args[1], latestFlag, limitFlag,
+					commits, errs := runGitHistoryConsole(args[0], args[1], latestFlag, globalRevisionsFlag, limitFlag, limitTimeFlag,
 						updateChan, errorChan, baseFlag, remoteFlag)
 
 					// wait.
@@ -216,6 +218,9 @@ func GetConsoleCommand() *cobra.Command {
 
 					// boot.
 					app := tui.BuildApplication(commits, Version)
+					if app == nil {
+						return errors.New("console is unable to start")
+					}
 					if err := app.Run(); err != nil {
 						pterm.Error.Println("console is unable to start, are you running this inside a container?")
 						pterm.Error.Println("the console requires a terminal to run, it cannot run on a headless system.")
@@ -223,6 +228,7 @@ func GetConsoleCommand() *cobra.Command {
 						fmt.Println()
 						return err
 					}
+					return nil
 
 				} else {
 					go listenForUpdates(updateChan, errorChan)
@@ -261,10 +267,10 @@ func GetConsoleCommand() *cobra.Command {
 	return cmd
 }
 
-func runGithubHistoryConsole(username, repo, filePath string, latest bool, limit int,
+func runGithubHistoryConsole(username, repo, filePath string, latest bool, limit int, limitTime int,
 	progressChan chan *model.ProgressUpdate, errorChan chan model.ProgressError, base string, remote bool) ([]*model.Commit, []error) {
 
-	commitHistory, errs := git.ProcessGithubRepo(username, repo, filePath, progressChan, errorChan, true, limit, base, remote)
+	commitHistory, errs := git.ProcessGithubRepo(username, repo, filePath, progressChan, errorChan, true, limit, limitTime, base, remote)
 
 	if latest && len(commitHistory) > 1 {
 		commitHistory = commitHistory[:1]
@@ -296,7 +302,7 @@ func runGithubHistoryConsole(username, repo, filePath string, latest bool, limit
 	return commitHistory, nil
 }
 
-func runGitHistoryConsole(gitPath, filePath string, latest bool, limit int,
+func runGitHistoryConsole(gitPath, filePath string, latest bool, globalRevisions bool, limit int, limitTime int,
 	updateChan chan *model.ProgressUpdate, errorChan chan model.ProgressError, base string, remote bool) ([]*model.Commit, []error) {
 
 	if gitPath == "" || filePath == "" {
@@ -310,7 +316,8 @@ func runGitHistoryConsole(gitPath, filePath string, latest bool, limit int,
 			filePath, gitPath), false, updateChan)
 
 	// build commit history.
-	commitHistory, err := git.ExtractHistoryFromFile(gitPath, filePath, updateChan, errorChan)
+	commitHistory, err := git.ExtractHistoryFromFile(gitPath, filePath, updateChan, errorChan, globalRevisions, limit, limitTime)
+
 	if err != nil {
 		close(updateChan)
 		model.SendProgressError("git", fmt.Sprintf("%d errors found extracting history", len(err)), errorChan)
@@ -318,7 +325,7 @@ func runGitHistoryConsole(gitPath, filePath string, latest bool, limit int,
 	}
 
 	// populate history with changes and data
-	git.PopulateHistoryWithChanges(commitHistory, limit, updateChan, errorChan, base, remote)
+	git.PopulateHistoryWithChanges(commitHistory, limit, limitTime, updateChan, errorChan, base, remote)
 
 	if latest {
 		commitHistory = commitHistory[:1]
@@ -356,13 +363,13 @@ func runLeftRightCompare(left, right string, updateChan chan *model.ProgressUpda
 
 	commits := []*model.Commit{
 		{
-			Hash:       uuid.NewV4().String()[:6],
+			Hash:       uuid.New().String()[:6],
 			Message:    fmt.Sprintf("New: %s, Original: %s", right, left),
 			CommitDate: time.Now(),
 			Data:       rightBytes,
 		},
 		{
-			Hash:       uuid.NewV4().String()[:6],
+			Hash:       uuid.New().String()[:6],
 			Message:    fmt.Sprintf("Original file: %s", left),
 			CommitDate: time.Now(),
 			Data:       leftBytes,

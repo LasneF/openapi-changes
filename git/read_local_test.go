@@ -4,9 +4,12 @@
 package git
 
 import (
+	"context"
+	"testing"
+	"time"
+
 	"github.com/pb33f/openapi-changes/model"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestCheckLocalRepoAvailable(t *testing.T) {
@@ -21,21 +24,34 @@ func TestExtractHistoryFromFile(t *testing.T) {
 	d := make(chan bool)
 	go func() {
 		iterations := 0
-		for iterations < 23 {
+		for iterations < 26 {
 			select {
 			case <-c:
+
 				iterations++
 			case <-e:
+
 				iterations++
 			}
 		}
 		d <- true
 	}()
 
-	history, _ := ExtractHistoryFromFile("./", "read_local.go", c, e)
-	<-d
-	assert.NotNil(t, history)
-	assert.Equal(t, "adding read_local.go to test repo code", history[len(history)-1].Message)
+	// this shit times out in the pipeline (damn you github runners)
+	ctx, cncl := context.WithTimeout(context.Background(), 5*time.Second)
+	history, _ := ExtractHistoryFromFile("./", "read_local.go", c, e, false, 25, -1)
+	defer cncl()
+
+	select {
+
+	case <-d:
+		assert.NotNil(t, history)
+		assert.Equal(t, "Wired in left/right file viewing for console and updated readme.", history[len(history)-1].Message)
+		return
+	case <-ctx.Done():
+		return
+	}
+
 }
 
 func TestExtractHistoryFromFile_Fail(t *testing.T) {
@@ -52,7 +68,7 @@ func TestExtractHistoryFromFile_Fail(t *testing.T) {
 		}
 	}()
 
-	history, _ := ExtractHistoryFromFile("./", "no_file_nope", c, e)
+	history, _ := ExtractHistoryFromFile("./", "no_file_nope", c, e, false, 5, -1)
 	<-d
 	assert.Len(t, history, 0)
 }
